@@ -1,0 +1,111 @@
+#!/bin/bash
+
+return_1() {
+	echo ${1}
+}
+
+return_2() {
+	echo ${2}
+}
+
+display_entry() {
+	echo "${COUNT}. ${@:3}"
+}
+
+display_entries() {
+	COUNT=0
+	echo "${RESULTS}" | while read LINE; do
+		display_entry ${LINE}
+		((COUNT++))
+	done
+}
+
+list_entries() {
+	while read LINE; do
+		LINE="${LINE//:/ }"
+		echo "${LINE}"
+	done
+}
+
+locate_selected() {
+	COUNT=0
+	echo "${RESULTS}" | while read LINE; do
+		if [ "${COUNT}" == "${SELECT}" ]; then
+			echo "${LINE}"
+			break
+		fi
+		((COUNT++))
+	done
+}
+
+retrieve_article() {
+	COUNT=0
+	dd if="${DB}" skip=${OFFSET}B | bzip2 -d -c | while read LINE; do
+		[ "${PAGE}" ] && ((COUNT++))
+		[ "${COUNT}" -eq "1" ] && PL[1]="${LINE}"
+		[ "${COUNT}" -eq "2" ] && PL[2]="${LINE}"
+		if [ "${PAGE}" ] && [ "${COUNT}" -eq "3" ] && [ "${LINE}" == "<id>${AID}</id>" ]; then
+			FOUND=1
+			echo "<page>"
+			echo "${PL[1]}"
+			echo "${PL[2]}"
+		fi
+		[ "${FOUND}" ] && [ "${LINE}" == "</page>" ] && echo "${LINE}" && break
+		[ "${LINE}" == "<page>" ] && PAGE=1
+		[ "${LINE}" == "</page>" ] && PAGE= && COUNT=0
+		[ "${FOUND}" ] && echo "${LINE}"
+	done
+}
+
+[ ! "${1}" ] && echo "no search term given!" && exit 1
+SEARCH="${1}"
+
+CACHE="${HOME}/.cache/wiki-cli"
+SCACHE="${HOME}/.cache/wiki-cli/search"
+INDEX="${CACHE}/enwiki-latest-pages-articles-multistream-index.txt.bz2"
+DB="${CACHE}/enwiki-latest-pages-articles-multistream.xml.bz2"
+[ ! -d "${SCACHE}" ] && mkdir -p "${SCACHE}"
+
+[ ! -f "${INDEX}" ] && wget https://dumps.wikimedia.org/enwiki/latest/enwiki-latest-pages-articles-multistream-index.txt.bz2 -O "${INDEX}"
+
+[ ! -f "${DB}" ] && wget https://dumps.wikimedia.org/enwiki/latest/enwiki-latest-pages-articles-multistream.xml.bz2 -O "${DB}"
+
+if [ -f "${SCACHE}/${SEARCH////_}" ]; then
+	RESULTS="$(cat "${SCACHE}/${SEARCH////_}")"
+	[ ! "${RESULTS}" ] && exit 2
+else
+	RESULTS="$(bzip2 -d -c "${INDEX}" | grep "${SEARCH}" | list_entries)"
+	[ ! "${RESULTS}" ] && echo -n >> "${SCACHE}/${SEARCH////_}" && exit 2
+	echo "${RESULTS}" > "${SCACHE}/${SEARCH////_}"
+fi
+
+COUNT="$(echo "${RESULTS}" | wc -l)"
+((COUNT--))
+
+if [ "${COUNT}" -eq "0" ]; then
+	SELECT=0
+elif [ "${2}" ]; then
+	SELECT="${2}"
+else
+	display_entries
+	exit 0
+fi
+
+for VALID in $(seq 0 ${COUNT}); do
+	if [ "${VALID}" == "${SELECT}" ]; then
+		VALIDATED=1
+		break
+	fi
+done
+
+[ ! "${VALIDATED}" ] && echo "${SELECT} not a valid choice!" && exit 1
+
+[ -f "${SCACHE}/${SEARCH}${SELECT}" ] && cat "${SCACHE}/${SEARCH}${SELECT}" && exit
+
+LINE="$(locate_selected)"
+
+OFFSET="$(return_1 ${LINE})"
+AID="$(return_2 ${LINE})"
+
+retrieve_article > "${SCACHE}/${SEARCH////_}${SELECT}"
+cat "${SCACHE}/${SEARCH////_}${SELECT}"
